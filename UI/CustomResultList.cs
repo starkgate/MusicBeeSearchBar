@@ -24,6 +24,19 @@ namespace MusicBeePlugin.UI
         private const int ARTWORK_CORNER_RADIUS = 8;
         public const float HEADER_TOP_PADDING = 8f;
 
+        private static readonly ResultActionType[] ActionButtonOrder =
+        {
+            ResultActionType.PlayNow,
+            ResultActionType.QueueNext,
+            ResultActionType.QueueLast
+        };
+
+        private ResultActionType? _hoveredActionButton = null;
+        private int _pressedActionButtonIndex = -1;
+        private ResultActionType? _pressedActionButton = null;
+
+        public event EventHandler<ResultActionEventArgs> ActionButtonClicked;
+
         public float DpiScale { get; set; } = 1.0f;
 
         private List<SearchResult> _items = new List<SearchResult>();
@@ -546,9 +559,20 @@ namespace MusicBeePlugin.UI
             // 2. Draw Image
             DrawResultImage(g, resultItem, imageArea, availableHeight);
 
-            // 3. Define Text Area and Draw Right Icon
+            // 3. Define Text Area and Draw Right Icon / Action Buttons
+            bool showActionButtons = isHovered && !_isDraggingThumb && ActionService.SupportsQuickActions(resultItem.Type);
+
             Rectangle textBounds;
-            if (ShowTypeIcons)
+            if (showActionButtons)
+            {
+                var buttonRects = GetActionButtonRects(bounds);
+                int buttonsLeft = buttonRects.Count > 0 ? buttonRects[0].Bounds.X : (bounds.X + itemWidth);
+                textBounds = new Rectangle(
+                    imageArea.Right + imageToTextSpacing, bounds.Y,
+                    buttonsLeft - (imageArea.Right + imageToTextSpacing) - (imageToTextSpacing / 2), bounds.Height
+                );
+            }
+            else if (ShowTypeIcons)
             {
                 int rightIconSize = resultItem.IsTopMatch ? (int)(availableHeight * 0.25) : (int)(availableHeight * 0.4);
                 var iconArea = new Rectangle(
@@ -576,6 +600,166 @@ namespace MusicBeePlugin.UI
             {
                 DrawResultText(g, resultItem, textBounds, titleFont, detailFont);
             }
+
+            // 5. Draw Action Buttons (on top, drawn last so they're never clipped by text)
+            if (showActionButtons)
+            {
+                DrawActionButtons(g, bounds);
+            }
+        }
+
+        private List<(ResultActionType Type, Rectangle Bounds)> GetActionButtonRects(Rectangle itemBounds)
+        {
+            var result = new List<(ResultActionType, Rectangle)>();
+
+            int buttonSize = Math.Max(16, (int)(24 * DpiScale));
+            int gap = (int)(4 * DpiScale);
+            int rightPadding = (int)(10 * DpiScale);
+
+            int itemWidth = itemBounds.Width;
+            if (_isThumbVisible)
+            {
+                itemWidth -= SCROLLBAR_WIDTH;
+            }
+
+            int totalWidth = (buttonSize * ActionButtonOrder.Length) + (gap * (ActionButtonOrder.Length - 1));
+            int x = itemBounds.X + itemWidth - rightPadding - totalWidth;
+            int y = itemBounds.Y + (itemBounds.Height - buttonSize) / 2;
+
+            foreach (var type in ActionButtonOrder)
+            {
+                result.Add((type, new Rectangle(x, y, buttonSize, buttonSize)));
+                x += buttonSize + gap;
+            }
+
+            return result;
+        }
+
+        private void DrawActionButtons(Graphics g, Rectangle itemBounds)
+        {
+            var iconColor = Theme?.Icon ?? Color.Gray;
+
+            foreach (var (type, rect) in GetActionButtonRects(itemBounds))
+            {
+                bool isButtonHovered = _hoveredActionButton == type;
+                bool isPressed = _pressedActionButton == type;
+
+                if (isButtonHovered || isPressed)
+                {
+                    // A neutral, slightly-lighter-than-background square, independent of the
+                    // accent/selection color, so it reads as a plain hover affordance.
+                    using (var path = GetRoundedRectPath(rect, (int)(6 * DpiScale)))
+                    using (var bgBrush = new SolidBrush(Color.FromArgb(isPressed ? 45 : 24, Color.White)))
+                    {
+                        g.FillPath(bgBrush, path);
+                    }
+                }
+
+                DrawActionButtonIcon(g, type, rect, iconColor);
+            }
+        }
+
+        // Icon geometry lifted straight from Deezer's SVGs (24x24 viewBox), parsed once and reused.
+        // PlayBeforeIcon / AddToQueueIcon are drawn filled, matching the source. PlayFilledIcon is
+        // drawn as an outline instead of filled, since a solid triangle reads as "currently playing"
+        // in this plugin's context.
+        private static readonly Lazy<GraphicsPath> PlayNowIconPath = new Lazy<GraphicsPath>(() => SvgPathParser.Parse(
+            "M15.82 9.383a81.65 81.65 0 00-4.534-2.618 74.589 74.589 0 00-3.378-1.702.662.662 0 00-.94.543 74.476 74.476 0 00-.216 3.777 81.376 81.376 0 000 5.234 74.47 74.47 0 00.215 3.777c.038.458.525.739.94.543a74.596 74.596 0 003.379-1.702 81.654 81.654 0 004.533-2.618 74.416 74.416 0 003.195-2.096.635.635 0 000-1.041 74.368 74.368 0 00-3.195-2.097Z"));
+
+        private static readonly Lazy<GraphicsPath> QueueNextIconPath = new Lazy<GraphicsPath>(() => SvgPathParser.Parse(
+            "M9.324 11.403c-.24.22-.357.32-.504.445l-.008.007-.332.286-.878-1.004c.153-.133.256-.221.348-.298l.008-.007c.135-.115.243-.207.462-.409a40.695 40.695 0 0 0 1.505-1.45H6.667c-.736 0-1.334.597-1.334 1.333v2.667H4v-2.667a2.67 2.67 0 0 1 2.667-2.667h3.258c-.486-.494-.92-.911-1.505-1.45a12.857 12.857 0 0 0-.472-.417c-.09-.077-.194-.165-.346-.298l.878-1.003.33.284c.153.129.27.229.514.454.81.747 1.339 1.266 2.096 2.057a1.5 1.5 0 0 1 0 2.08 42.308 42.308 0 0 1-2.096 2.057ZM20 8.973h-5.378V7.639H20v1.334Zm-5.378 3.675H20v-1.333h-5.378v1.333ZM20 20H4v-1.333h16V20ZM4 16.324h16v-1.333H4v1.333Z"));
+
+        private static readonly Lazy<GraphicsPath> QueueLastIconPath = new Lazy<GraphicsPath>(() => SvgPathParser.Parse(
+            "M20 4H4v1.333h16V4ZM9.324 12.597c-.24-.22-.357-.32-.504-.445l-.008-.007a24.958 24.958 0 0 1-.332-.286l-.878 1.004c.153.133.256.221.348.298l.008.007c.135.115.243.207.462.409.584.539 1.018.956 1.505 1.45H6.667a1.335 1.335 0 0 1-1.334-1.333v-2.667H4v2.667a2.67 2.67 0 0 0 2.667 2.667h3.258c-.486.494-.92.911-1.505 1.45-.224.207-.332.298-.472.417-.09.077-.194.165-.346.297l.878 1.004.33-.284c.153-.129.27-.229.514-.454a41.946 41.946 0 0 0 2.096-2.058 1.5 1.5 0 0 0 0-2.078 42.304 42.304 0 0 0-2.096-2.058ZM20 15.027h-5.378v1.334H20v-1.334Zm-5.378-3.675H20v1.333h-5.378v-1.333ZM4 7.676h16v1.333H4V7.676Z"));
+
+        private const float IconViewBoxSize = 24f;
+
+        private void DrawActionButtonIcon(Graphics g, ResultActionType type, Rectangle bounds, Color color)
+        {
+            GraphicsPath svgPath;
+            bool filled;
+
+            switch (type)
+            {
+                case ResultActionType.PlayNow:
+                    svgPath = PlayNowIconPath.Value;
+                    filled = false;
+                    break;
+                case ResultActionType.QueueNext:
+                    svgPath = QueueNextIconPath.Value;
+                    filled = true;
+                    break;
+                case ResultActionType.QueueLast:
+                    svgPath = QueueLastIconPath.Value;
+                    filled = true;
+                    break;
+                default:
+                    return;
+            }
+
+            float pad = bounds.Width * 0.12f;
+            float availableSize = Math.Min(bounds.Width, bounds.Height) - (pad * 2);
+            if (availableSize <= 0) return;
+
+            float scale = availableSize / IconViewBoxSize;
+            float offsetX = bounds.X + ((bounds.Width - (IconViewBoxSize * scale)) / 2f);
+            float offsetY = bounds.Y + ((bounds.Height - (IconViewBoxSize * scale)) / 2f);
+
+            GraphicsState state = g.Save();
+            try
+            {
+                g.TranslateTransform(offsetX, offsetY);
+                g.ScaleTransform(scale, scale);
+
+                if (filled)
+                {
+                    using (var brush = new SolidBrush(color))
+                    {
+                        g.FillPath(brush, svgPath);
+                    }
+                }
+                else
+                {
+                    float screenStrokeWidth = Math.Max(1f, 1.4f * DpiScale);
+                    using (var pen = new Pen(color, screenStrokeWidth / scale))
+                    {
+                        pen.LineJoin = LineJoin.Round;
+                        g.DrawPath(pen, svgPath);
+                    }
+                }
+            }
+            finally
+            {
+                g.Restore(state);
+            }
+        }
+
+        private Rectangle GetItemClientBounds(int index)
+        {
+            int itemY = _itemYPositions[index] - _scrollTop;
+            return new Rectangle(0, itemY, Width, GetItemHeight(index));
+        }
+
+        private bool TryGetActionButtonAt(int index, Point location, out ResultActionType actionType)
+        {
+            actionType = default;
+
+            if (index < 0 || index >= _items.Count || index >= _itemYPositions.Count) return false;
+
+            var item = _items[index];
+            if (!ActionService.SupportsQuickActions(item.Type)) return false;
+
+            var itemBounds = GetItemClientBounds(index);
+            foreach (var (type, rect) in GetActionButtonRects(itemBounds))
+            {
+                if (rect.Contains(location))
+                {
+                    actionType = type;
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private void DrawResultImage(Graphics g, SearchResult resultItem, Rectangle imageArea, int availableHeight)
@@ -821,6 +1005,16 @@ namespace MusicBeePlugin.UI
             }
 
             int index = GetIndexFromY(e.Y);
+
+            if (TryGetActionButtonAt(index, e.Location, out var actionType))
+            {
+                _suppressClick = true;
+                _pressedActionButtonIndex = index;
+                _pressedActionButton = actionType;
+                InvalidateItem(index);
+                return;
+            }
+
             if (index >= 0 && index < _items.Count)
             {
                 if (_items[index].Type != ResultType.Header)
@@ -876,9 +1070,21 @@ namespace MusicBeePlugin.UI
                     if (oldHoveredIndex != -1) InvalidateItem(oldHoveredIndex);
                     if (_hoveredIndex != -1) InvalidateItem(_hoveredIndex);
                 }
+
+                ResultActionType? newHoveredActionButton = TryGetActionButtonAt(index, e.Location, out var hoveredType)
+                    ? hoveredType
+                    : (ResultActionType?)null;
+
+                if (_hoveredActionButton != newHoveredActionButton)
+                {
+                    _hoveredActionButton = newHoveredActionButton;
+                    if (_hoveredIndex != -1) InvalidateItem(_hoveredIndex);
+                }
+
+                Cursor = newHoveredActionButton.HasValue ? Cursors.Hand : Cursors.Default;
             }
         }
-        
+
         protected override void OnMouseUp(MouseEventArgs e)
         {
             base.OnMouseUp(e);
@@ -887,6 +1093,23 @@ namespace MusicBeePlugin.UI
                 _isDraggingThumb = false;
                 // After dragging, re-evaluate which item is being hovered over
                 OnMouseMove(e);
+            }
+            else if (_pressedActionButtonIndex != -1)
+            {
+                int index = _pressedActionButtonIndex;
+                var pressedType = _pressedActionButton;
+
+                _pressedActionButtonIndex = -1;
+                _pressedActionButton = null;
+                InvalidateItem(index);
+
+                if (pressedType.HasValue &&
+                    TryGetActionButtonAt(index, e.Location, out var releasedType) &&
+                    releasedType == pressedType.Value &&
+                    index < _items.Count)
+                {
+                    ActionButtonClicked?.Invoke(this, new ResultActionEventArgs(_items[index], pressedType.Value));
+                }
             }
         }
 
@@ -909,6 +1132,8 @@ namespace MusicBeePlugin.UI
                 _hoveredIndex = -1;
                 InvalidateItem(oldHoveredIndex);
             }
+            _hoveredActionButton = null;
+            Cursor = Cursors.Default;
         }
 
         protected override void OnResize(EventArgs e)

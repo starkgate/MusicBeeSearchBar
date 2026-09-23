@@ -264,6 +264,15 @@ namespace MusicBeePlugin.UI
             }, null);
         }
 
+        private void ResultsListBox_ActionButtonClicked(object sender, ResultActionEventArgs e)
+        {
+            HandleResultSelection(e.Result, new KeyEventArgs(Keys.None), () =>
+            {
+                actionService.PerformAction(e.ActionType, e.Result);
+                return Task.CompletedTask;
+            });
+        }
+
         private void DragPanel_MouseDown(object sender, MouseEventArgs e)
         {
             isDragging = true;
