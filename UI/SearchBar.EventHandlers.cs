@@ -294,6 +294,50 @@ namespace MusicBeePlugin.UI
             isDragging = false;
         }
 
+        private void BeginWidthResize(bool fromLeft)
+        {
+            _isResizingWidth = true;
+            _resizeFromLeft = fromLeft;
+            _resizeStartCursorPos = Cursor.Position;
+            _resizeStartWidth = Width;
+            _resizeStartLeft = Left;
+        }
+
+        private void ResizeGrip_MouseMove(object sender, MouseEventArgs e)
+        {
+            if (!_isResizingWidth) return;
+
+            int deltaX = Cursor.Position.X - _resizeStartCursorPos.X;
+            int minWidth = (int)(MIN_WIDTH_UNSCALED * dpiScale);
+            int maxWidth = Screen.FromControl(this).WorkingArea.Width;
+
+            int newWidth = _resizeFromLeft ? _resizeStartWidth - deltaX : _resizeStartWidth + deltaX;
+            newWidth = Math.Max(minWidth, Math.Min(maxWidth, newWidth));
+
+            if (_resizeFromLeft)
+            {
+                int widthChange = newWidth - _resizeStartWidth;
+                Left = _resizeStartLeft - widthChange;
+            }
+
+            Width = newWidth;
+        }
+
+        private void ResizeGrip_MouseUp(object sender, MouseEventArgs e)
+        {
+            if (!_isResizingWidth) return;
+            _isResizingWidth = false;
+            PersistWindowWidth();
+        }
+
+        private void PersistWindowWidth()
+        {
+            if (searchUIConfig.InitialSize.Width == Width) return;
+
+            searchUIConfig.InitialSize = new Size(Width, searchUIConfig.InitialSize.Height);
+            SaveConfig();
+        }
+
         private async void ResultsListBox_Scrolled(object sender, EventArgs e)
         {
             if (searchUIConfig.ShowImages && !_isImageLoading)

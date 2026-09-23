@@ -156,6 +156,42 @@ namespace MusicBeePlugin.UI
             InitializeLoadingIndicator();
         }
 
+        private void InitializeResizeGrips(float dpiScale)
+        {
+            int gripWidth = Math.Max(4, (int)(6 * dpiScale));
+
+            resizeGripRight = new Panel
+            {
+                Width = gripWidth,
+                Height = ClientSize.Height,
+                Location = new Point(ClientSize.Width - gripWidth, 0),
+                BackColor = Color.Transparent,
+                Cursor = Cursors.SizeWE,
+                Anchor = AnchorStyles.Top | AnchorStyles.Right | AnchorStyles.Bottom,
+            };
+            resizeGripRight.MouseDown += (s, e) => BeginWidthResize(fromLeft: false);
+            resizeGripRight.MouseMove += ResizeGrip_MouseMove;
+            resizeGripRight.MouseUp += ResizeGrip_MouseUp;
+
+            resizeGripLeft = new Panel
+            {
+                Width = gripWidth,
+                Height = ClientSize.Height,
+                Location = new Point(0, 0),
+                BackColor = Color.Transparent,
+                Cursor = Cursors.SizeWE,
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Bottom,
+            };
+            resizeGripLeft.MouseDown += (s, e) => BeginWidthResize(fromLeft: true);
+            resizeGripLeft.MouseMove += ResizeGrip_MouseMove;
+            resizeGripLeft.MouseUp += ResizeGrip_MouseUp;
+
+            Controls.Add(resizeGripRight);
+            Controls.Add(resizeGripLeft);
+            resizeGripRight.BringToFront();
+            resizeGripLeft.BringToFront();
+        }
+
         private void InitializeHotkeys()
         {
             // Assign event handlers defined in SearchBar.EventHandlers.cs
