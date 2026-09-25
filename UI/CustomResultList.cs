@@ -309,10 +309,17 @@ namespace MusicBeePlugin.UI
         private SolidBrush _hoverBrush;
         private Font _headerFont;
 
+        // Fixed, theme-independent colors - unlike the brushes above these never need
+        // invalidating, so they're just built once on first use.
+        private SolidBrush _actionButtonHoverBrush;
+        private SolidBrush _actionButtonPressedBrush;
+
         private SolidBrush GetBackgroundBrush() => _backgroundBrush ?? (_backgroundBrush = new SolidBrush(BackColor));
         private SolidBrush GetHighlightBrush() => _highlightBrush ?? (_highlightBrush = new SolidBrush(HighlightColor));
         private SolidBrush GetHoverBrush() => _hoverBrush ?? (_hoverBrush = new SolidBrush(HoverColor));
         private Font GetHeaderFont() => _headerFont ?? (_headerFont = new Font(ResultFont.FontFamily, ResultFont.Size, FontStyle.Italic));
+        private SolidBrush GetActionButtonHoverBrush() => _actionButtonHoverBrush ?? (_actionButtonHoverBrush = new SolidBrush(Color.FromArgb(24, Color.White)));
+        private SolidBrush GetActionButtonPressedBrush() => _actionButtonPressedBrush ?? (_actionButtonPressedBrush = new SolidBrush(Color.FromArgb(45, Color.White)));
 
         protected override void OnBackColorChanged(EventArgs e)
         {
@@ -343,6 +350,8 @@ namespace MusicBeePlugin.UI
                 _highlightBrush?.Dispose();
                 _hoverBrush?.Dispose();
                 _headerFont?.Dispose();
+                _actionButtonHoverBrush?.Dispose();
+                _actionButtonPressedBrush?.Dispose();
             }
             base.Dispose(disposing);
         }
@@ -716,8 +725,8 @@ namespace MusicBeePlugin.UI
                 {
                     // A neutral, slightly-lighter-than-background square, independent of the
                     // accent/selection color, so it reads as a plain hover affordance.
+                    var bgBrush = isPressed ? GetActionButtonPressedBrush() : GetActionButtonHoverBrush();
                     using (var path = GetRoundedRectPath(rect, (int)(6 * DpiScale)))
-                    using (var bgBrush = new SolidBrush(Color.FromArgb(isPressed ? 45 : 24, Color.White)))
                     {
                         g.FillPath(bgBrush, path);
                     }
