@@ -206,14 +206,63 @@ namespace MusicBeePlugin.Services
         // just the previous keystroke's surviving candidates instead of rescanning the whole
         // library. Falls back to a full scan whenever the query isn't a simple extension of
         // the cached one (an edit, a paste, backspacing, ...) or the library was reloaded.
-        private string _cachedArtistQuery;
-        private List<ArtistEntry> _cachedArtistCandidates;
-        private string _cachedAlbumQuery;
-        private List<AlbumEntry> _cachedAlbumCandidates;
-        private string _cachedSongQuery;
-        private List<SongEntry> _cachedSongCandidates;
-        private string _cachedPlaylistQuery;
-        private List<(string Name, string Path)> _cachedPlaylistCandidates;
+        //
+        // Each cache is tagged with the exact Database instance it was built from (captured
+        // once per search, not read live off the `db` field) rather than relying on a reset
+        // at reload time. A reload doesn't cancel a search that's already in flight, so
+        // without this a stale search could finish after the reset and repopulate the cache
+        // with entries from the just-replaced library.
+        private class CandidateCache<T>
+        {
+            public Database Db;
+            public string Query;
+            public List<T> Candidates;
+        }
+
+        private readonly object _cacheLock = new object();
+        private readonly CandidateCache<ArtistEntry> _artistCache = new CandidateCache<ArtistEntry>();
+        private readonly CandidateCache<AlbumEntry> _albumCache = new CandidateCache<AlbumEntry>();
+        private readonly CandidateCache<SongEntry> _songCache = new CandidateCache<SongEntry>();
+        private readonly CandidateCache<(string Name, string Path)> _playlistCache = new CandidateCache<(string Name, string Path)>();
+
+        // Returns the cached candidates for `scanDb`/`normalizedQuery` if they're usable,
+        // or null if this search needs to fall back to a full scan.
+        private List<T> TryGetCandidateSource<T>(CandidateCache<T> cache, Database scanDb, string normalizedQuery)
+        {
+            lock (_cacheLock)
+            {
+                if (config.EnableContainsCheck
+                    && cache.Db == scanDb
+                    && cache.Query != null
+                    && normalizedQuery.StartsWith(cache.Query, StringComparison.Ordinal))
+                {
+                    return cache.Candidates;
+                }
+                return null;
+            }
+        }
+
+        // Tags the cache with the Database this scan actually ran against (not whatever
+        // `db` currently is - a concurrent reload may have already moved it on) so a later
+        // search can never mistake candidates from a different library generation as valid.
+        private void UpdateCandidateCache<T>(CandidateCache<T> cache, Database scanDb, List<T> matched, string normalizedQuery)
+        {
+            lock (_cacheLock)
+            {
+                if (config.EnableContainsCheck)
+                {
+                    cache.Db = scanDb;
+                    cache.Query = normalizedQuery;
+                    cache.Candidates = matched;
+                }
+                else
+                {
+                    cache.Db = null;
+                    cache.Query = null;
+                    cache.Candidates = null;
+                }
+            }
+        }
 
         public SearchService(MusicBeeApiInterface mbApi, Config.SearchUIConfig config)
         {
@@ -244,16 +293,17 @@ namespace MusicBeePlugin.Services
                 db = new Database(tracks, GetEnabledTypes());
                 IsLoaded = true;
 
-                // The old candidate caches reference entries from the previous db and no
-                // longer reflect the (possibly changed) library.
-                _cachedArtistQuery = null;
-                _cachedArtistCandidates = null;
-                _cachedAlbumQuery = null;
-                _cachedAlbumCandidates = null;
-                _cachedSongQuery = null;
-                _cachedSongCandidates = null;
-                _cachedPlaylistQuery = null;
-                _cachedPlaylistCandidates = null;
+                // Not strictly required for correctness (each cache entry is tagged with the
+                // Database it was built from, so a stale one is simply never matched again),
+                // but drops the old lists promptly instead of waiting for them to be
+                // overwritten by the next contains-check search.
+                lock (_cacheLock)
+                {
+                    _artistCache.Db = null; _artistCache.Query = null; _artistCache.Candidates = null;
+                    _albumCache.Db = null; _albumCache.Query = null; _albumCache.Candidates = null;
+                    _songCache.Db = null; _songCache.Query = null; _songCache.Candidates = null;
+                    _playlistCache.Db = null; _playlistCache.Query = null; _playlistCache.Candidates = null;
+                }
 
                 sw.Stop();
                 Debug.WriteLine($"Database created in {sw.ElapsedMilliseconds}ms");
@@ -355,11 +405,10 @@ namespace MusicBeePlugin.Services
         {
             var scoredArtists = new List<ArtistResult>();
 
-            bool useCache = config.EnableContainsCheck
-                && _cachedArtistQuery != null
-                && normalizedQuery.StartsWith(_cachedArtistQuery, StringComparison.Ordinal);
-
-            List<ArtistEntry> searchSource = useCache ? _cachedArtistCandidates : db.Artists;
+            // Snapshot db once: a reload landing mid-scan must not change which library
+            // generation this search (or its cache write below) is considered to belong to.
+            var scanDb = db;
+            List<ArtistEntry> searchSource = TryGetCandidateSource(_artistCache, scanDb, normalizedQuery) ?? scanDb.Artists;
             List<ArtistEntry> matchedEntities = config.EnableContainsCheck ? new List<ArtistEntry>() : null;
 
             foreach (var entity in searchSource)
@@ -399,8 +448,7 @@ namespace MusicBeePlugin.Services
                 }
             }
 
-            _cachedArtistCandidates = matchedEntities;
-            _cachedArtistQuery = matchedEntities != null ? normalizedQuery : null;
+            UpdateCandidateCache(_artistCache, scanDb, matchedEntities, normalizedQuery);
 
             return scoredArtists
                 .OrderByDescending(x => x.Score)
@@ -412,11 +460,8 @@ namespace MusicBeePlugin.Services
         {
             double multiplier = config.AlbumScoreMultiplier;
 
-            bool useCache = config.EnableContainsCheck
-                && _cachedAlbumQuery != null
-                && normalizedQuery.StartsWith(_cachedAlbumQuery, StringComparison.Ordinal);
-
-            IReadOnlyList<AlbumEntry> searchSource = useCache ? _cachedAlbumCandidates : db.Albums;
+            var scanDb = db;
+            IReadOnlyList<AlbumEntry> searchSource = TryGetCandidateSource(_albumCache, scanDb, normalizedQuery) ?? scanDb.Albums;
             IEnumerable<AlbumEntry> filtered = searchSource;
 
             if (config.EnableContainsCheck)
@@ -430,14 +475,12 @@ namespace MusicBeePlugin.Services
                     if (QueryMatchesWords(x.NormalizedAlbumArtist + " " + x.NormalizedAlbumName, sortedQueryWords, normalizeText: false))
                         matched.Add(x);
                 }
-                _cachedAlbumCandidates = matched;
-                _cachedAlbumQuery = normalizedQuery;
                 filtered = matched;
+                UpdateCandidateCache(_albumCache, scanDb, matched, normalizedQuery);
             }
             else
             {
-                _cachedAlbumCandidates = null;
-                _cachedAlbumQuery = null;
+                UpdateCandidateCache(_albumCache, scanDb, null, normalizedQuery);
             }
 
             return filtered
@@ -460,11 +503,8 @@ namespace MusicBeePlugin.Services
         {
             double multiplier = config.SongScoreMultiplier;
 
-            bool useCache = config.EnableContainsCheck
-                && _cachedSongQuery != null
-                && normalizedQuery.StartsWith(_cachedSongQuery, StringComparison.Ordinal);
-
-            IReadOnlyList<SongEntry> searchSource = useCache ? _cachedSongCandidates : db.Songs;
+            var scanDb = db;
+            IReadOnlyList<SongEntry> searchSource = TryGetCandidateSource(_songCache, scanDb, normalizedQuery) ?? scanDb.Songs;
             IEnumerable<SongEntry> filtered = searchSource;
 
             if (config.EnableContainsCheck)
@@ -476,14 +516,12 @@ namespace MusicBeePlugin.Services
                     if (QueryMatchesWords(x.NormalizedArtists + " " + x.NormalizedTitle, sortedQueryWords, normalizeText: false))
                         matched.Add(x);
                 }
-                _cachedSongCandidates = matched;
-                _cachedSongQuery = normalizedQuery;
                 filtered = matched;
+                UpdateCandidateCache(_songCache, scanDb, matched, normalizedQuery);
             }
             else
             {
-                _cachedSongCandidates = null;
-                _cachedSongQuery = null;
+                UpdateCandidateCache(_songCache, scanDb, null, normalizedQuery);
             }
 
             return filtered
@@ -506,13 +544,13 @@ namespace MusicBeePlugin.Services
         {
             double multiplier = config.PlaylistScoreMultiplier;
 
-            bool useCache = config.EnableContainsCheck
-                && _cachedPlaylistQuery != null
-                && normalizedQuery.StartsWith(_cachedPlaylistQuery, StringComparison.Ordinal);
+            // Playlists aren't part of Database, but are tagged against it anyway so a
+            // library reload also refreshes the playlist cache, matching prior behavior.
+            var scanDb = db;
 
             // On a cache hit this also skips re-querying MusicBee's playlist list via COM
             // interop for every keystroke, not just the fuzzy-matching cost.
-            List<(string Name, string Path)> searchSource = useCache ? _cachedPlaylistCandidates : GetAllPlaylists();
+            List<(string Name, string Path)> searchSource = TryGetCandidateSource(_playlistCache, scanDb, normalizedQuery) ?? GetAllPlaylists();
             IEnumerable<(string Name, string Path)> filtered = searchSource;
 
             if (config.EnableContainsCheck)
@@ -524,14 +562,12 @@ namespace MusicBeePlugin.Services
                     if (QueryMatchesWords(p.Name, sortedQueryWords))
                         matched.Add(p);
                 }
-                _cachedPlaylistCandidates = matched;
-                _cachedPlaylistQuery = normalizedQuery;
                 filtered = matched;
+                UpdateCandidateCache(_playlistCache, scanDb, matched, normalizedQuery);
             }
             else
             {
-                _cachedPlaylistCandidates = null;
-                _cachedPlaylistQuery = null;
+                UpdateCandidateCache(_playlistCache, scanDb, null, normalizedQuery);
             }
 
             return filtered
