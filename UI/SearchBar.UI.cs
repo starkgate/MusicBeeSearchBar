@@ -169,9 +169,10 @@ namespace MusicBeePlugin.UI
                 Cursor = Cursors.SizeWE,
                 Anchor = AnchorStyles.Top | AnchorStyles.Right | AnchorStyles.Bottom,
             };
-            resizeGripRight.MouseDown += (s, e) => BeginWidthResize(fromLeft: false);
+            resizeGripRight.MouseDown += (s, e) => BeginWidthResize(fromLeft: false, resizeGripRight);
             resizeGripRight.MouseMove += ResizeGrip_MouseMove;
             resizeGripRight.MouseUp += ResizeGrip_MouseUp;
+            resizeGripRight.MouseCaptureChanged += ResizeGrip_MouseCaptureChanged;
 
             resizeGripLeft = new Panel
             {
@@ -182,9 +183,10 @@ namespace MusicBeePlugin.UI
                 Cursor = Cursors.SizeWE,
                 Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Bottom,
             };
-            resizeGripLeft.MouseDown += (s, e) => BeginWidthResize(fromLeft: true);
+            resizeGripLeft.MouseDown += (s, e) => BeginWidthResize(fromLeft: true, resizeGripLeft);
             resizeGripLeft.MouseMove += ResizeGrip_MouseMove;
             resizeGripLeft.MouseUp += ResizeGrip_MouseUp;
+            resizeGripLeft.MouseCaptureChanged += ResizeGrip_MouseCaptureChanged;
 
             Controls.Add(resizeGripRight);
             Controls.Add(resizeGripLeft);
